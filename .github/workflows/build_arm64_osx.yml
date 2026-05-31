@@ -2,6 +2,9 @@ name: build-macos-arm64
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-macos:
     name: Build (macOS arm64)
@@ -28,8 +31,36 @@ jobs:
           cd /Volumes/adm/avidemux2
           bash bootStrapMacOS_Monterey.arm64.sh
 
-      - name: Upload dmg
-        uses: actions/upload-artifact@v4
+      - name: Derive version info
+        id: ver
+        run: |
+          cd /Volumes/adm/avidemux2
+          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date +%y%m%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Rename dmg
+        id: dmg
+        run: |
+          src=$(ls /Volumes/adm/avidemux2/installer/*.dmg)
+          dst="/Volumes/adm/avidemux2/installer/Avidemux-arm64-${{ steps.ver.outputs.date }}-${{ steps.ver.outputs.sha }}.dmg"
+          mv "$src" "$dst"
+          echo "path=$dst" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: avidemux-arm64
-          path: /Volumes/adm/avidemux2/installer/*.dmg
+          tag_name: arm64-${{ steps.ver.outputs.date }}-${{ steps.ver.outputs.sha }}
+          name: Avidemux arm64 (${{ steps.ver.outputs.date }})
+          body: |
+            ### 🛠 編譯資訊
+            - **目標平台**: macOS Apple Silicon (arm64)
+            - **Runner**: macos-14
+            - **Qt 版本**: Qt6
+            - **來源**: mean00/avidemux2 master @ ${{ steps.ver.outputs.sha }}
+            - **簽章**: ad-hoc，安裝後需執行 `xattr -dr com.apple.quarantine /Applications/Avidemux*.app`
+          draft: false
+          prerelease: false
+          files: |
+            ${{ steps.dmg.outputs.path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
