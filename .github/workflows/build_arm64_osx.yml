@@ -1,0 +1,35 @@
+name: build-macos-arm64
+on:
+  workflow_dispatch:
+
+jobs:
+  build-macos:
+    name: Build (macOS arm64)
+    runs-on: macos-14          # 釘住 arm64,別用 macos-latest
+    steps:
+      - name: Create case-sensitive volume
+        run: |
+          hdiutil create -size 25g -fs 'Case-sensitive APFS' \
+            -volname adm /tmp/adm.dmg
+          hdiutil attach /tmp/adm.dmg -mountpoint /Volumes/adm
+
+      - name: Clone (with submodules) into the volume
+        run: |
+          cd /Volumes/adm
+          git clone --recursive https://github.com/mean00/avidemux2.git
+
+      - name: Install deps
+        run: |
+          brew install cmake pkg-config nasm yasm qt xvid x264 x265 \
+            libvpx aom opus fdk-aac lame libass mp4v2 a52dec
+
+      - name: Build (Apple Silicon)
+        run: |
+          cd /Volumes/adm/avidemux2
+          bash bootStrapMacOS_Monterey.arm64.sh
+
+      - name: Upload dmg
+        uses: actions/upload-artifact@v4
+        with:
+          name: avidemux-arm64
+          path: /Volumes/adm/avidemux2/installer/*.dmg
