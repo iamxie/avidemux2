@@ -1,14 +1,57 @@
 name: build-macos-arm64
+
 on:
-  workflow_dispatch:
+  workflow_dispatch:        # 手動觸發:強制 build
+  schedule:
+    - cron: '0 2 * * *'     # 每天 UTC 02:00 = UTC+8 10:00
 
 permissions:
   contents: write
 
 jobs:
+  # ---- Job 1: 檢查上游是否有新 commit ----
+  check:
+    name: Check upstream
+    runs-on: ubuntu-latest
+    outputs:
+      should_build: ${{ steps.decide.outputs.should_build }}
+      sha:          ${{ steps.decide.outputs.sha }}
+      date:         ${{ steps.decide.outputs.date }}
+    steps:
+      - name: Compare upstream SHA with last release
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 上游 master 最新 commit
+          UPSTREAM_SHA=$(git ls-remote https://github.com/mean00/avidemux2.git refs/heads/master | cut -c1-7)
+          echo "Upstream: $UPSTREAM_SHA"
+
+          # 本 repo 最新 release 的 tag(可能不存在)
+          LAST_TAG=$(gh release list --repo "${{ github.repository }}" --limit 1 --json tagName --jq '.[0].tagName // ""' 2>/dev/null || echo "")
+          echo "Last release tag: $LAST_TAG"
+
+          echo "sha=$UPSTREAM_SHA"  >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
+          # 手動觸發 → 一律 build;否則比對 tag 裡是否已含此 SHA
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual run → build"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          elif echo "$LAST_TAG" | grep -q "$UPSTREAM_SHA"; then
+            echo "No new commit → skip"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New commit → build"
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ---- Job 2: 只有需要時才 build ----
   build-macos:
     name: Build (macOS arm64)
-    runs-on: macos-14          # 釘住 arm64,別用 macos-latest
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: macos-14
     steps:
       - name: Create case-sensitive volume
         run: |
@@ -31,33 +74,27 @@ jobs:
           cd /Volumes/adm/avidemux2
           bash bootStrapMacOS_Monterey.arm64.sh
 
-      - name: Derive version info
-        id: ver
-        run: |
-          cd /Volumes/adm/avidemux2
-          echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
-          echo "date=$(date +%y%m%d)" >> "$GITHUB_OUTPUT"
-
       - name: Rename dmg
         id: dmg
         run: |
           src=$(ls /Volumes/adm/avidemux2/installer/*.dmg)
-          dst="/Volumes/adm/avidemux2/installer/Avidemux-arm64-${{ steps.ver.outputs.date }}-${{ steps.ver.outputs.sha }}.dmg"
+          dst="/Volumes/adm/avidemux2/installer/Avidemux2-arm64-${{ needs.check.outputs.date }}-${{ needs.check.outputs.sha }}.dmg"
           mv "$src" "$dst"
           echo "path=$dst" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: arm64-${{ steps.ver.outputs.date }}-${{ steps.ver.outputs.sha }}
-          name: Avidemux arm64 (${{ steps.ver.outputs.date }})
+          tag_name: arm64-${{ needs.check.outputs.date }}-${{ needs.check.outputs.sha }}
+          name: Avidemux2 arm64 (${{ needs.check.outputs.date }})
           body: |
-            ### 🛠 編譯資訊
-            - **目標平台**: macOS Apple Silicon (arm64)
+            ### 🛠 Build info
+            - **Target**: macOS Apple Silicon (arm64)
             - **Runner**: macos-14
-            - **Qt 版本**: Qt6
-            - **來源**: mean00/avidemux2 master @ ${{ steps.ver.outputs.sha }}
-            - **簽章**: ad-hoc，安裝後需執行 `xattr -dr com.apple.quarantine /Applications/Avidemux*.app`
+            - **Qt**: Qt6
+            - **Source**: mean00/avidemux2 master @ ${{ needs.check.outputs.sha }}
+            - **Signing**: ad-hoc. After installing, run:
+              `xattr -dr com.apple.quarantine /Applications/Avidemux*.app`
           draft: false
           prerelease: false
           files: |
