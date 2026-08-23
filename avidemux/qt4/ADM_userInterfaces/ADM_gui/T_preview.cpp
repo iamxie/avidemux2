@@ -183,7 +183,7 @@ void ADM_Qvideo::setADMSize(int width, int height)
 {
     _width = width;
     _height = height;
-#if !defined(__APPLE__) && !defined(_WIN32) && defined(USING_QT6)
+#if 0 /* !defined(__APPLE__) && !defined(_WIN32) && defined(USING_QT6) */
     // Work around an issue with Qt 6.2.1 which results in video frame displaying
     // garbage for all subsequently loaded videos after its size was set to zero.
     static uint8_t workaround = 0;
@@ -224,7 +224,7 @@ void UI_QT4VideoWidget(QFrame *host)
     videoWindow = new ADM_Qvideo(host);
     if (admDetectQtEngine() == QT_WAYLAND_ENGINE)
     {
-        //videoWindow->winId(); // The result looks broken, don't try this for now.
+        videoWindow->winId();
         if (videoWindow->windowHandle() && QuiMainWindows && QuiMainWindows->windowHandle())
         {
             videoWindow->windowHandle()->setParent(QuiMainWindows->windowHandle());
@@ -267,12 +267,18 @@ void UI_updateDrawWindowSize(void *win, uint32_t w, uint32_t h)
     {
         UI_setNeedsResizingFlag(true);
     }
+    QSize restore = QuiMainWindows->size();
     videoWindow->setADMSize(w, h);
     if (!w || !h)
         QuiMainWindows->update(); // clean up the space previously occupied by the video window on closing
     UI_purge();
 
     printf("[RDR] Resizing to %u x %u\n", displayW, displayH);
+    if (QuiMainWindows->size() != restore)
+    {
+        //ADM_info("Restoring main window size from %d x %d to %d x %d\n", QuiMainWindows->width(), QuiMainWindows->height(), restore.width(), restore.height());
+        QuiMainWindows->resize(restore);
+    }
 }
 /**
  *
@@ -331,8 +337,7 @@ static void systemWindowInfo_once()
     break;
     case QT_WAYLAND_ENGINE: {
         mySystemWindowId = 0;
-//#ifdef USE_NATIVE_API
-#if 0
+#ifdef USE_NATIVE_API
         QPlatformNativeInterface *native = currentQApplication()->platformNativeInterface();
         if (native && videoWindow)
         {
@@ -390,9 +395,8 @@ static void systemWindowInfo(GUI_WindowInfo *xinfo)
 void UI_getWindowInfo(void *draw, GUI_WindowInfo *xinfo)
 {
     ADM_assert(videoWindow);
-    QWidget *widget = videoWindow->parentWidget();
     xinfo->widget = videoWindow;
-    // xinfo->windowOpaquePointer = myWindowOpaque;
+    xinfo->windowOpaquePointer = myWindowOpaque;
     xinfo->systemWindowId = 0;
     xinfo->scalingFactor = 1.;
     QPoint localPoint(0, 0);
