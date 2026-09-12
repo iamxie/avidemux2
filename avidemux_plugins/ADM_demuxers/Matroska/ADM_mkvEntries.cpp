@@ -97,7 +97,8 @@ static int aac_get_sample_rate_index(uint32_t sample_rate)
  */
 static bool hasNeedle(const char *haystack, const char *needle)
 {
-    if(NULL!=strstr( (char *)(haystack+12),needle)) return true;
+    if (strstr((char *)haystack, needle))
+        return true;
     return false;
 }
 /**
@@ -712,14 +713,23 @@ uint8_t entryWalk(ADM_ebml_file *head,uint32_t headlen,entryDesc *entry)
         case MKV_LANGUAGE_IETF:
                 {
                  if(ietfLanguageTagFound) break;
-                 char s[100];
-                 s[99]=0;
-                 father.readString(s,len);
+#define LANG_DESC_BUF_LEN 100
+                 char s[LANG_DESC_BUF_LEN] = {0};
+                 uint32_t sublen = (len < LANG_DESC_BUF_LEN - 1) ? len : LANG_DESC_BUF_LEN - 1;
+                 sublen = father.readString(s, sublen);
+                 if (len >= LANG_DESC_BUF_LEN)
+                     ADM_warning("Language descriptor too long: %" PRIu64", damaged file?\n", len);
+                 if (len > sublen)
+                 {
+                     father.skip(len - sublen); // consume
+                     ADM_info("Skipping %" PRIu64" bytes after language descriptor.\n", len - sublen);
+                 }
                  if(!strlen(s))
                      strcpy(s,"eng"); // english is default
                  if(!strcmp(s,"unknown")) // we were using "unknown", which is not a valid ISO 639 code
                  {
-                     memset(s,'\0',100);
+                     memset(s, 0, LANG_DESC_BUF_LEN);
+#undef LANG_DESC_BUF_LEN
                      std::string und=ADM_UNKNOWN_LANGUAGE;
                      strcpy(s,und.c_str());
                      ADM_info("Found 'unknown' as language code, replacing it with '%s'\n",und.c_str());
@@ -745,16 +755,21 @@ uint8_t entryWalk(ADM_ebml_file *head,uint32_t headlen,entryDesc *entry)
             break;
         case MKV_CODEC_ID:
             {
-            uint8_t *codec=new uint8_t[len+1];
-                  father.readBin(codec,len);
-                  codec[len]=0;
-                  entry->codecId = (char *)codec;
-                  entry->fcc=ADM_mkvCodecToFourcc((char *)codec);
-                  
-                  delete [] codec;
-
+#define CODEC_ID_BUF_LEN 1024
+                char codec[CODEC_ID_BUF_LEN] = {0};
+                uint32_t sublen = (len < CODEC_ID_BUF_LEN - 1) ? len : CODEC_ID_BUF_LEN - 1;
+                sublen = father.readString(codec, sublen);
+                if (len >= CODEC_ID_BUF_LEN)
+                    ADM_warning("Codec ID too long: %" PRIu64" bytes, damaged file?\n", len);
+                if (len > sublen)
+                {
+                    father.skip(len - sublen); // consume
+                    ADM_warning("Skipped %" PRIu64" bytes after codec ID.\n", len - sublen);
+                }
+                entry->codecId = codec;
+                entry->fcc = ADM_mkvCodecToFourcc(codec);
             }
-                  break;
+            break;
         default: printf("[MKV]not handled %s\n",ss);
                   father.skip(len);
         }

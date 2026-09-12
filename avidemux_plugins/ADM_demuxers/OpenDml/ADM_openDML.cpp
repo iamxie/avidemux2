@@ -93,18 +93,32 @@ uint8_t OpenDMLHeader::getExtraHeaderData(uint32_t *len, uint8_t **data)
 uint8_t  OpenDMLHeader::getFrame(uint32_t framenum,ADMCompressedImage *img)
 {
     if(framenum>= (uint32_t)_videostream.dwLength) return 0;
-uint64_t offset=_idx[framenum].offset; //+_mdatOffset;
-	
- 	fseeko(_fd,offset,SEEK_SET);
- 	fread(img->data, _idx[framenum].size, 1, _fd);
-  	img->dataLength=_idx[framenum].size;
-        img->flags=_idx[framenum].intra;
-        img->demuxerDts=_idx[framenum].dts; // FIXME
-        img->demuxerPts=_idx[framenum].pts;
-        
-	aprintf("Size: %lu\n",_idx[framenum].size);
+    odmlIndex *dx = &(_idx[framenum]);
+    // Truncating a compressed image may result in massive damage
+    // initially going unnoticed, better fail right away.
+    if (dx->size > ADM_COMPRESSED_MAX_DATA_LENGTH)
+    {
+        ADM_error("Abnormally large frame %" PRIu32" size %" PRIu32", bailing out.\n", framenum, dx->size);
+        return 0;
+    }
+    if (0 != fseeko(_fd, dx->offset, SEEK_SET))
+    {
+        ADM_error("Seek to 0x%" PRIx64" for frame %" PRIu32" failed.\n", dx->offset, framenum);
+        return 0;
+    }
+    if (1 != fread(img->data, dx->size, 1, _fd))
+    {
+        ADM_error("Reading frame %" PRIu32" failed.\n", framenum);
+        return 0;
+    }
+    img->dataLength = dx->size;
+    img->flags = dx->intra;
+    img->demuxerDts = dx->dts; // FIXME
+    img->demuxerPts = dx->pts;
+
+    aprintf("Frame %lu size: %lu\n", dx->size);
 //	if(offset & 1) printf("odd!\n");
- 	return 1;
+    return 1;
 }
 /**
     \fn getFrame
@@ -266,7 +280,7 @@ uint8_t    OpenDMLHeader::open(const char *name)
 uint8_t badAvi=0;
 uint32_t rd;
 
-	printf("** opening OpenDML files **");	
+	printf("** opening OpenDML files **\n");
         
 	_fd=ADM_fopen(name,"rb");
 	if(!_fd)
@@ -551,7 +565,8 @@ uint32_t rd;
                 printf("\nOpenDML file successfully read..\n");
                 if(ret==1) 
                 {
-                    computePtsDts();
+                    if (!computePtsDts())
+                        return 0;
                     removeEmptyFrames();
                 }
                 ADM_info("PtsAvailable : %d\n",(int)ptsAvailable);
@@ -608,7 +623,11 @@ bool OpenDMLHeader::removeEmptyFrames(void)
 uint8_t OpenDMLHeader::computePtsDts(void)
 {
     // if it is mpeg4-sp, removed packet bitstream & reindex
-    if(isMpeg4Compatible(_videostream.fccHandler))  OpenDMLHeader::unpackPacked(  );
+    if(isMpeg4Compatible(_videostream.fccHandler))
+    {
+        if (ADM_OK != OpenDMLHeader::unpackPacked())
+            return 0;
+    }
     // Now if we have B frames, it is properly tagged
     // Begin by putting PTS=DTS i.e. no B-frames
     for(int i=0;i<_videostream.dwLength;i++)
@@ -923,12 +942,13 @@ void OpenDMLHeader::walk(riffParser *p)
 							walk(n);
 							delete n;
 						}
-						p->curPos=ftello(p->fd);
 					if(MKFCC('s','t','r','l')==sub)
 					{
+						ADM_assert(_nbTrack < ADM_ODML_MAX_TRACKS);
  						_nbTrack++;
 					}
-					
+					p->curPos = ftello(p->fd);
+					if(p->curPos & 1) p->skip(1); // ???
 				}
 				break;
 		default:
