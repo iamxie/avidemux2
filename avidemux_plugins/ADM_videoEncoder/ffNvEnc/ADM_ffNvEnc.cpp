@@ -204,6 +204,41 @@ bool ADM_ffNvEncEncoder::configureContext(void)
     targetPixFrmt = ADM_PIXFRMT_NV12;
 #endif
 
+    // Set encoder delay
+    int mult = (_context->max_b_frames > 0) ? 2 : 0;
+    if (_context->max_b_frames > 1 && (NvEncSettings.b_ref_mode == NV_FF_BFRAME_REF_EACH || NvEncSettings.b_ref_mode == NV_FF_BFRAME_REF_MIDDLE))
+        mult += 1;
+    encoderDelay = frameIncrement * mult;
+    ADM_info("Encoder delay set to %d frames = %" PRIu64" us.\n", mult, encoderDelay);
+
+    // Print nvenc options
+    {
+        AVDictionaryEntry *t = NULL;
+        char buf[1024] = "";
+        while ((t = av_dict_get(_options, "", t, AV_DICT_IGNORE_SUFFIX))) {
+            if (strlen(buf) > 0) strncat(buf, ", ", sizeof(buf) - strlen(buf) - 1);
+            strncat(buf, t->key, sizeof(buf) - strlen(buf) - 1);
+            strncat(buf, "=", sizeof(buf) - strlen(buf) - 1);
+            strncat(buf, t->value, sizeof(buf) - strlen(buf) - 1);
+        }
+        ADM_info("[ffNvEnc] nvenc options: %s\n", buf);
+    }
+
+    // Print ffmpeg options
+    {
+        char buf[1024] = "";
+        snprintf(buf, sizeof(buf), "bit_rate=%d rc_max_rate=%d gop_size=%d refs=%d max_b_frames=%d rc_buffer_size=%d",
+                 _context->bit_rate, _context->rc_max_rate, _context->gop_size,
+                 _context->refs, _context->max_b_frames, _context->rc_buffer_size);
+        ADM_info("[ffNvEnc] FFmpeg options: %s\n", buf);
+    }
+
+    // Print timing info
+    ADM_info("[ffNvEnc] time_base=%d/%d framerate=%d/%d frameIncrement=%" PRIu64 " source->getInfo()->frameIncrement=%" PRIu64 "\n",
+             _context->time_base.num, _context->time_base.den,
+             _context->framerate.num, _context->framerate.den,
+             frameIncrement, source->getInfo()->frameIncrement);
+
     return true;
 }
 
@@ -230,17 +265,6 @@ bool ADM_ffNvEncEncoder::setup(void)
     ADM_info("[ffMpeg] Setup ok\n");
 
     return true;
-}
-
-/**
-    \fn getEncoderDelay
-*/
-uint64_t ADM_ffNvEncEncoder::getEncoderDelay(void)
-{
-    uint64_t delay=0;
-    if(NvEncSettings.bframes)
-        delay = frameIncrement * ((NvEncSettings.b_ref_mode == NV_FF_BFRAME_REF_DISABLED)? 2 : 3); // excessive?
-    return delay;
 }
 
 /**
