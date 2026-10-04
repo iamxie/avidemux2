@@ -51,7 +51,7 @@ jobs:
     name: Build (macOS arm64)
     needs: check
     if: needs.check.outputs.should_build == 'true'
-    runs-on: macos-14
+    runs-on: macos-15          # macos-14 將於 2026/11/2 退役
     steps:
       - name: Create case-sensitive volume
         run: |
@@ -90,7 +90,7 @@ jobs:
           body: |
             ### 🛠 Build info
             - **Target**: macOS Apple Silicon (arm64)
-            - **Runner**: macos-14
+            - **Runner**: macos-15
             - **Qt**: Qt6
             - **Source**: mean00/avidemux2 master @ ${{ needs.check.outputs.sha }}
             - **Signing**: ad-hoc. After installing, run:
