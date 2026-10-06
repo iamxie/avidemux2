@@ -66,8 +66,9 @@ jobs:
 
       - name: Install deps
         run: |
+          # fdk-aac 已於 2026/9 被 Homebrew 停用並移除,不再安裝
           brew install cmake pkg-config nasm yasm qt xvid x264 x265 \
-            libvpx aom opus fdk-aac lame libass mp4v2 a52dec
+            libvpx aom opus lame libass mp4v2 a52dec
 
       - name: Build (Apple Silicon)
         run: |
@@ -93,6 +94,7 @@ jobs:
             - **Runner**: macos-15
             - **Qt**: Qt6
             - **Source**: mean00/avidemux2 master @ ${{ needs.check.outputs.sha }}
+            - **Note**: FDK AAC encoder not included (fdk-aac was removed from Homebrew)
             - **Signing**: ad-hoc. After installing, run:
               `xattr -dr com.apple.quarantine /Applications/Avidemux*.app`
           draft: false
