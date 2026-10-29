@@ -18,6 +18,7 @@
 
 #include "ADM_default.h"
 #include "ADM_ffNvEnc.h"
+#include "ADM_coreNvenc.h"
 #undef ADM_MINIMAL_UI_INTERFACE // we need the full UI
 #include "DIA_factory.h"
 //#define USE_NV12
@@ -137,7 +138,7 @@ bool ADM_ffNvEncEncoder::configureContext(void)
     switch(NvEncSettings.rc_mode)
     {
         case NV_FF_RC_AUTO:
-            _context->bit_rate=NvEncSettings.bitrate*1000;
+            _context->bit_rate = 0;
             break;
         case NV_FF_RC_CONSTQP:
 #ifdef AV1_ENCODER
@@ -231,13 +232,6 @@ bool ADM_ffNvEncEncoder::configureContext(void)
 #ifdef USE_NV12
     targetPixFrmt = ADM_PIXFRMT_NV12;
 #endif
-
-    // Set encoder delay
-    int mult = (_context->max_b_frames > 0) ? 2 : 0;
-    if (_context->max_b_frames > 1)
-        mult += 1;
-    encoderDelay = frameIncrement * mult;
-    ADM_info("Encoder delay set to %d frames = %" PRIu64" us.\n", mult, encoderDelay);
 
     // Print nvenc options
     {
@@ -358,11 +352,50 @@ link:
 }
 
 /**
+    \fn ctor
+ */
+encCapsHelper::encCapsHelper(void)
+{
+    encoderCapabilities.codecId =
+#ifdef H265_ENCODER
+        ADM_NVENC_HEVC_IS_SUPPORTED;
+#elif defined(AV1_ENCODER)
+        ADM_NVENC_AV1_IS_SUPPORTED;
+#else
+        ADM_NVENC_H264_IS_SUPPORTED;
+#endif
+
+    if (false == ADM_getNvencCodecSupportFlags(&encoderCapabilities))
+        encoderCapabilities.codecId = 0;
+}
+/**
+    \fn getCaps
+    \brief Copy caps to provided target. Return true if codec is supported and caps are valid.
+ */
+bool encCapsHelper::getCaps(admNvencCaps *tgt)
+{
+    if (!encoderCapabilities.codecId)
+        return false;
+    if (tgt)
+        memcpy(tgt, &encoderCapabilities, sizeof(admNvencCaps));
+    return true;
+}
+
+/**
     \fn ffNvEncConfigure
     \brief Show configuration dialog
 */
 bool ffNvEncConfigure(void)
 {
+    encCapsHelper helper;
+    admNvencCaps caps;
+    caps.codecId = 0;
+    if (!helper.getCaps(&caps))
+    {
+        ADM_warning("Configuring encoder not supported by interface and hardware!\n");
+        caps.codecId = 0;
+    }
+
     diaMenuEntry meRcMode[]={
         {NV_FF_RC_AUTO,         QT_TRANSLATE_NOOP("ffnvenc","Controlled by Preset"),NULL},
         {NV_FF_RC_CONSTQP,      QT_TRANSLATE_NOOP("ffnvenc","Constant Quantizer"),NULL},
@@ -405,25 +438,49 @@ bool ffNvEncConfigure(void)
 #endif
     };
 
-    diaMenuEntry meNumRef[]={
-        {0,QT_TRANSLATE_NOOP("ffnvenc","Autoselect"),NULL},
-        {1,QT_TRANSLATE_NOOP("ffnvenc","1"),NULL},
-        {2,QT_TRANSLATE_NOOP("ffnvenc","2"),NULL},
-        {3,QT_TRANSLATE_NOOP("ffnvenc","3"),NULL},
-        {4,QT_TRANSLATE_NOOP("ffnvenc","4"),NULL},
-        {5,QT_TRANSLATE_NOOP("ffnvenc","5"),NULL},
-        {6,QT_TRANSLATE_NOOP("ffnvenc","6"),NULL},
-        {7,QT_TRANSLATE_NOOP("ffnvenc","7"),NULL}
-    };
+    diaMenuEntryDynamic **meBframeRefEntries = NULL;
+    uint32_t nbBframeRefMenuEntries = 1;
+    if (caps.codecId && (caps.bframeRef & 7))
+    {
+        if (caps.bframeRef & 1)
+            nbBframeRefMenuEntries++;
+        if (caps.bframeRef & 2)
+            nbBframeRefMenuEntries++;
+        if (caps.bframeRef & 4)
+            nbBframeRefMenuEntries++;
+    }
 
-    diaMenuEntry meBframeRef[]={
-        {NV_FF_BFRAME_REF_DISABLED,QT_TRANSLATE_NOOP("ffnvenc","Disabled"),NULL},
-        {NV_FF_BFRAME_REF_EACH,QT_TRANSLATE_NOOP("ffnvenc","Each"),NULL},
-        {NV_FF_BFRAME_REF_MIDDLE,QT_TRANSLATE_NOOP("ffnvenc","Middle"),NULL}
-#ifdef AV1_ENCODER
-        ,{NV_FF_BFRAME_REF_HIERARCHICAL,QT_TRANSLATE_NOOP("ffnvenc","Hierarchical"),NULL}
-#endif
-    };
+    meBframeRefEntries = new diaMenuEntryDynamic* [nbBframeRefMenuEntries];
+    meBframeRefEntries[0] = new diaMenuEntryDynamic(NV_FF_BFRAME_REF_DISABLED, QT_TRANSLATE_NOOP("ffnvenc","Disabled"), NULL);
+    if (caps.codecId && (caps.bframeRef & 1))
+        meBframeRefEntries[1] = new diaMenuEntryDynamic(NV_FF_BFRAME_REF_EACH, QT_TRANSLATE_NOOP("ffnvenc","Each"), NULL);
+    if (caps.codecId && (caps.bframeRef & 2))
+        meBframeRefEntries[2] = new diaMenuEntryDynamic(NV_FF_BFRAME_REF_MIDDLE, QT_TRANSLATE_NOOP("ffnvenc","Middle"), NULL);
+    if (caps.codecId && (caps.bframeRef & 4))
+        meBframeRefEntries[3] = new diaMenuEntryDynamic(NV_FF_BFRAME_REF_HIERARCHICAL, QT_TRANSLATE_NOOP("ffnvenc","Hierarchical"), NULL);
+
+    diaMenuEntryDynamic **meMaxRefEntries = NULL;
+    uint32_t nbMaxRefMenuEntries = 1;
+#define REFS_MENU_MAX 8
+    if (caps.codecId && caps.multRefFrames)
+        nbMaxRefMenuEntries = REFS_MENU_MAX;
+
+    meMaxRefEntries = new diaMenuEntryDynamic* [REFS_MENU_MAX];
+
+    char **meMaxRefMenuEntryTitles = new char* [REFS_MENU_MAX];
+    meMaxRefMenuEntryTitles[0] = ADM_strdup(QT_TRANSLATE_NOOP("ffnvenc","Autoselect"));
+    meMaxRefMenuEntryTitles[1] = ADM_strdup(QT_TRANSLATE_NOOP("ffnvenc","1"));
+    meMaxRefMenuEntryTitles[2] = ADM_strdup(QT_TRANSLATE_NOOP("ffnvenc","2"));
+    meMaxRefMenuEntryTitles[3] = ADM_strdup(QT_TRANSLATE_NOOP("ffnvenc","3"));
+    meMaxRefMenuEntryTitles[4] = ADM_strdup(QT_TRANSLATE_NOOP("ffnvenc","4"));
+    meMaxRefMenuEntryTitles[5] = ADM_strdup(QT_TRANSLATE_NOOP("ffnvenc","5"));
+    meMaxRefMenuEntryTitles[6] = ADM_strdup(QT_TRANSLATE_NOOP("ffnvenc","6"));
+    meMaxRefMenuEntryTitles[7] = ADM_strdup(QT_TRANSLATE_NOOP("ffnvenc","7"));
+
+    for (int i = 0; i < nbMaxRefMenuEntries; i++)
+    {
+        meMaxRefEntries[i] = new diaMenuEntryDynamic(i, meMaxRefMenuEntryTitles[i], NULL);
+    }
 
     ffnvenc_encoder *conf=&NvEncSettings;
 
@@ -433,25 +490,36 @@ bool ffNvEncConfigure(void)
     diaElemMenu qzPreset(PX(preset),QT_TRANSLATE_NOOP("ffnvenc","Preset:"),MZ(mePreset),mePreset);
     diaElemMenu tune(PX(tune),QT_TRANSLATE_NOOP("ffnvenc","Tune:"),MZ(meTune),meTune);
     diaElemMenu profile(PX(profile),QT_TRANSLATE_NOOP("ffnvenc","Profile:"),MZ(meProfile),meProfile);
-    diaElemMenu bFrameRef(PX(b_ref_mode),QT_TRANSLATE_NOOP("ffnvenc","Use B-Frames as References:"),MZ(meBframeRef),meBframeRef);
-    diaElemMenu maxRefs(PX(refs),QT_TRANSLATE_NOOP("ffnvenc","Maximum Reference Frames:"),MZ(meNumRef),meNumRef);
+
+    diaElemMenuDynamic *bFrameRef = new diaElemMenuDynamic(PX(b_ref_mode),
+                QT_TRANSLATE_NOOP("ffnvenc","Use B-Frames as References:"),
+                nbBframeRefMenuEntries, meBframeRefEntries);
+
+    diaElemMenuDynamic *maxRefs = new diaElemMenuDynamic(PX(refs),
+                QT_TRANSLATE_NOOP("ffnvenc","Maximum Reference Frames:"),
+                nbMaxRefMenuEntries, meMaxRefEntries);
 
 #ifdef AV1_ENCODER
-    diaElemUInteger qual(PX(quality),QT_TRANSLATE_NOOP("ffnvenc","Quality:"),0,63);
+# define MAX_QZ 63
 #else
-    diaElemUInteger qual(PX(quality),QT_TRANSLATE_NOOP("ffnvenc","Quality:"),0,51);
+# define MAX_QZ 51
 #endif
+    diaElemUInteger qual(PX(quality),QT_TRANSLATE_NOOP("ffnvenc","Quality:"), 0, MAX_QZ);
+#undef MAX_QZ
     diaElemUInteger bitrate(PX(bitrate),QT_TRANSLATE_NOOP("ffnvenc","Bitrate (kbps):"),1,500000);
     diaElemUInteger maxBitrate(PX(max_bitrate),QT_TRANSLATE_NOOP("ffnvenc","Max Bitrate (kbps):"),1,500000);
 
     diaElemUInteger gopSize(PX(gopsize),QT_TRANSLATE_NOOP("ffnvenc","GOP Size:"),0,1000);
-#ifdef AV1_ENCODER
-    diaElemUInteger maxBframes(PX(bframes),QT_TRANSLATE_NOOP("ffnvenc","Maximum Consecutive B-Frames:"),0,31);
-#else
-    diaElemUInteger maxBframes(PX(bframes),QT_TRANSLATE_NOOP("ffnvenc","Maximum Consecutive B-Frames:"),0,5);
-#endif
 
-    diaElemUInteger lookAhead(PX(lookahead),QT_TRANSLATE_NOOP("ffnvenc","Lookahead:"),0,64);
+    int mx = 31;
+    if (caps.codecId && caps.maxBframes > 0)
+    {
+        if (caps.maxBframes < mx)
+            mx = caps.maxBframes;
+    }
+    diaElemUInteger maxBframes(PX(bframes), QT_TRANSLATE_NOOP("ffnvenc","Maximum Consecutive B-Frames:"), 0, mx);
+
+    diaElemUInteger lookAhead(PX(lookahead),QT_TRANSLATE_NOOP("ffnvenc","Lookahead:"), 0, 31); // <= 31 - bframes
     diaElemUInteger aqStrength(PX(aq_strength),QT_TRANSLATE_NOOP("ffnvenc","AQ Strength:"),1,15);
 
     diaElemToggle spatAq(PX(spatial_aq),QT_TRANSLATE_NOOP("ffnvenc","Spatial AQ"));
@@ -480,7 +548,6 @@ bool ffNvEncConfigure(void)
     rateControl.swallow(&bitrate);
     rateControl.swallow(&maxBitrate);
 
-    rcmode.link(meRcMode,1,&bitrate);
     rcmode.link(meRcMode+1,1,&qual);
     rcmode.link(meRcMode+2,1,&bitrate);
     rcmode.link(meRcMode+3,1,&qual);
@@ -497,8 +564,8 @@ bool ffNvEncConfigure(void)
     frameControl.swallow(&gopSize);
     frameControl.swallow(&maxBframes);
 
-    refControl.swallow(&bFrameRef);
-    refControl.swallow(&maxRefs);
+    refControl.swallow(bFrameRef);
+    refControl.swallow(maxRefs);
 
 #define NB_ELEM(x) sizeof(x)/sizeof(diaElem *)
     /* First Tab : basic settings */
@@ -526,7 +593,7 @@ bool ffNvEncConfigure(void)
     diaElemTabs tabAdvanced(QT_TRANSLATE_NOOP("ffnvenc","Advanced Settings"),NB_ELEM(advanced),advanced);
 
     diaElemTabs *tabs[]={&tabBasic,&tabAdvanced};
-    if(diaFactoryRunTabs(
+    void *cookie = diaFactoryRunTabsPrepare(
 #ifdef H265_ENCODER
             QT_TRANSLATE_NOOP("ffnvenc","NVENC HEVC configuration"),
 #elif defined(AV1_ENCODER)
@@ -534,8 +601,52 @@ bool ffNvEncConfigure(void)
 #else
             QT_TRANSLATE_NOOP("ffnvenc","NVENC H.264 configuration"),
 #endif
-            2,tabs))
+            2, tabs);
+
+    // Disable unsupported stuff
+    maxBframes.enable(caps.codecId && caps.maxBframes > 0);
+    wPred.enable(caps.codecId && caps.lookahead);
+    tempAq.enable(caps.codecId && caps.temporalAq);
+    lookAhead.enable(caps.codecId && (caps.lookahead & 1));
+
+    bFrameRef->enable(caps.codecId && (caps.bframeRef & 3));
+    maxRefs->enable(caps.codecId && caps.multRefFrames);
+
+    uint8_t dialogAccepted = diaFactoryRunTabsFinish(cookie);
+
+    // cleanup
+
+    // free maxRefs menu
+    for (int i = 0; i < nbMaxRefMenuEntries; i++)
+    {
+        delete meMaxRefEntries[i];
+    }
+    delete [] meMaxRefEntries;
+    meMaxRefEntries = NULL;
+    delete maxRefs;
+    maxRefs = NULL;
+
+    for (int i = 0; i < REFS_MENU_MAX; i++)
+    {
+        ADM_dezalloc(meMaxRefMenuEntryTitles[i]);
+        meMaxRefMenuEntryTitles[i] = NULL;
+    }
+    delete [] meMaxRefMenuEntryTitles;
+    meMaxRefMenuEntryTitles = NULL;
+
+    // free bFrameRef menu
+    for (int i = 0; i < nbBframeRefMenuEntries; i++)
+    {
+        delete meBframeRefEntries[i];
+    }
+    delete [] meBframeRefEntries;
+    meBframeRefEntries = NULL;
+    delete bFrameRef;
+    bFrameRef = NULL;
+
+    if (dialogAccepted)
         return true;
+
     return false;
 }
 // EOF
